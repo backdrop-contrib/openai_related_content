@@ -48,8 +48,13 @@ function openai_related_content_settings_form($form, &$form_state) {
   $config = config('openai_related_content.settings');
 
   // Get all available Search API indexes
-  $indexes = search_api_index_load_multiple(FALSE);
-  $index_options = [];
+  if (!function_exists('search_api_index_load_multiple')) {
+    backdrop_set_message(t('Search API module is required but not available.'), 'error');
+    return $form;
+  }
+
+  // Get all available Search API indexes
+  $indexes = search_api_index_load_multiple(FALSE);  $index_options = [];
   foreach ($indexes as $index_id => $index) {
     $index_options[$index_id] = $index->name;
   }
@@ -136,8 +141,7 @@ function openai_related_content_settings_form($form, &$form_state) {
     $form['views_integration']['view_display_link'] = [
       '#type' => 'item',
       '#title' => t('Edit selected display'),
-      '#markup' => l(t('Open the selected View display'), $edit_path, ['attributes' => ['target' => '_blank']]),
-    ];
+      '#markup' => l(t('Open the selected View display'), $edit_path, ['attributes' => ['target' => '_blank', 'rel' => 'noopener noreferrer']]),    ];
   }
 
   // Cache management
@@ -231,13 +235,19 @@ function openai_related_content_block_info() {
  * Implements hook_block_view().
  */
 function openai_related_content_block_view($delta = '') {
-  if ($delta !== 'openai_related_content_block') return;
+  if ($delta !== 'openai_related_content_block') {
+    return NULL;
+  }
 
   // Only display on canonical node/% pages.
-  if (arg(0) !== 'node' || !is_numeric(arg(1)) || !empty(arg(2))) return;
+  if (arg(0) !== 'node' || !is_numeric(arg(1)) || !empty(arg(2))) {
+    return NULL;
+  }
 
   $node = menu_get_object('node');
-  if (!$node || !is_numeric($node->nid)) return;
+  if (!$node || !is_numeric($node->nid)) {
+    return NULL;
+  }
 
   $cache_key = 'openai_related_content:' . $node->nid;
   $cached = cache_get($cache_key, 'cache');
@@ -331,6 +341,96 @@ function openai_related_content_get_text($node) {
 }
 
 /**
+ * Minimal requirements checker used by the test form.
+ * Returns an array of requirement items compatible with Backdrop's system.
+ *
+ * @param string $mode
+ *   'runtime' or other modes (unused currently).
+ * @return array
+ */
+function openai_related_content_requirements($mode = 'runtime') {
+  $requirements = [];
+
+  // OpenAI client class
+  if (class_exists('OpenAIApi')) {
+    $requirements[] = [
+      'title' => t('OpenAI client'),
+      'severity' => 0,
+      'description' => t('OpenAI client library is available.'),
+    ];
+  }
+  else {
+    $requirements[] = [
+      'title' => t('OpenAI client'),
+      'severity' => 1,
+      'description' => t('OpenAI client class (OpenAIApi) is missing. Some features will be disabled.'),
+    ];
+  }
+
+  // Vector client class
+  if (class_exists('SearchApiAiMilvusVectorClient')) {
+    $requirements[] = [
+      'title' => t('Milvus vector client'),
+      'severity' => 0,
+      'description' => t('Search API Milvus vector client is available.'),
+    ];
+  }
+  else {
+    $requirements[] = [
+      'title' => t('Milvus vector client'),
+      'severity' => 1,
+      'description' => t('SearchApiAiMilvusVectorClient class is missing. Vector searches will be disabled.'),
+    ];
+  }
+
+  // Search API availability
+  if (function_exists('search_api_index_load')) {
+    $requirements[] = [
+      'title' => t('Search API'),
+      'severity' => 0,
+      'description' => t('Search API functions are available.'),
+    ];
+  }
+  else {
+    $requirements[] = [
+      'title' => t('Search API'),
+      'severity' => 1,
+      'description' => t('Search API module is not available.'),
+    ];
+  }
+
+  // API key configured?
+  $openai_config = config('openai.settings');
+  $api_key = NULL;
+  if ($openai_config) {
+    // key_get_key_value may not exist in some installs; attempt to read safely.
+    if (function_exists('key_get_key_value')) {
+      $api_key = key_get_key_value($openai_config->get('api_key'));
+    }
+    else {
+      $api_key = $openai_config->get('api_key');
+    }
+  }
+
+  if (!empty($api_key)) {
+    $requirements[] = [
+      'title' => t('OpenAI API key'),
+      'severity' => 0,
+      'description' => t('OpenAI API key appears configured.'),
+    ];
+  }
+  else {
+    $requirements[] = [
+      'title' => t('OpenAI API key'),
+      'severity' => 1,
+      'description' => t('No OpenAI API key configured. Embeddings and related content will not work.'),
+    ];
+  }
+
+  return $requirements;
+}
+
+/**
  * Gets embedding vector using OpenAI.
  *
  * @param string $text
@@ -338,27 +438,54 @@ function openai_related_content_get_text($node) {
  */
 function openai_related_content_get_embedding($text) {
   $openai_config = config('openai.settings');
-  $api_key = key_get_key_value($openai_config->get('api_key'));
-  if (!$api_key) return NULL;
+  $api_key = NULL;
+  if ($openai_config) {
+    if (function_exists('key_get_key_value')) {
+      $api_key = key_get_key_value($openai_config->get('api_key'));
+    }
+    else {
+      $api_key = $openai_config->get('api_key');
+    }
+  }
 
-  $embeddings_config = config('openai_embeddings.settings');
-  $model = $embeddings_config->get('model') ?: 'text-embedding-3-small';
+  if (empty($api_key)) {
+    watchdog('openai_related_content', 'OpenAI API key not configured; cannot request embeddings.', [], WATCHDOG_WARNING);
+    return NULL;
+  }
 
-  $openai_api = new OpenAIApi($api_key);
-  return $openai_api->embedding($text, $model);
+  if (!class_exists('OpenAIApi')) {
+    watchdog('openai_related_content', 'OpenAI API client class (OpenAIApi) not found; cannot request embeddings.', [], WATCHDOG_WARNING);
+    return NULL;
+  }
+
+  try {
+    $openai_api = new OpenAIApi($api_key);
+    if (!method_exists($openai_api, 'embedding')) {
+      watchdog('openai_related_content', 'OpenAIApi client does not implement embedding() method.', [], WATCHDOG_WARNING);
+      return NULL;
+    }
+
+    $result = $openai_api->embedding($text, $embeddings_model = (config('openai_embeddings.settings')->get('model') ?: 'text-embedding-3-small'));
+
+    // If the client returns an object/array with vector, normalize expectations.
+    return $result;
+  }
+  catch (Exception $e) {
+    watchdog('openai_related_content', 'OpenAI embedding request failed: @msg', ['@msg' => $e->getMessage()], WATCHDOG_ERROR);
+    return NULL;
+  }
 }
 
 /**
  * Search vector database for similar nodes, returning nid and title.
- *
- * @param array $embedding
- * @param int $exclude_nid
- * @param int $limit
- * @param string $index_id
- *   Optional Search API index ID (overrides config).
- * @return array
  */
 function openai_related_content_vector_search($embedding, $exclude_nid, $limit = 3, $index_id = NULL) {
+  // Validate embedding
+  if (empty($embedding) || !is_array($embedding)) {
+    watchdog('openai_related_content', 'Invalid or empty embedding provided to vector search.', [], WATCHDOG_WARNING);
+    return [];
+  }
+
   // Get config
   $config = config('openai_related_content.settings');
   if (!$index_id) {
@@ -367,20 +494,44 @@ function openai_related_content_vector_search($embedding, $exclude_nid, $limit =
   $collection = $config->get('collection_name') ?: 'amafoundation';
 
   // Load the Search API index and get the server
-  $index = search_api_index_load($index_id);
-  if (!$index || !$index->server()) {
+  if (!function_exists('search_api_index_load')) {
+    watchdog('openai_related_content', 'Search API functions not available; cannot perform vector search.', [], WATCHDOG_WARNING);
     return [];
   }
 
-  // Create Milvus client using the Search API server options
-  $vector_client = new SearchApiAiMilvusVectorClient($index->server()->options);
+  $index = search_api_index_load($index_id);
+  if (!$index || !$index->server()) {
+    watchdog('openai_related_content', 'Search API index or server not found for index: @index', ['@index' => $index_id], WATCHDOG_WARNING);
+    return [];
+  }
+
+  if (!class_exists('SearchApiAiMilvusVectorClient')) {
+    watchdog('openai_related_content', 'Vector client class SearchApiAiMilvusVectorClient not found; vector search disabled.', [], WATCHDOG_WARNING);
+    return [];
+  }
+
+  try {
+    $vector_client = new SearchApiAiMilvusVectorClient($index->server()->options);
+  }
+  catch (Exception $e) {
+    watchdog('openai_related_content', 'Failed to construct vector client: @msg', ['@msg' => $e->getMessage()], WATCHDOG_ERROR);
+    return [];
+  }
 
   $outputFields = ['nid', 'title'];
-  // Request many more chunks to ensure we get enough distinct nodes
-  // If we want 3 distinct nodes and chunks are grouped, we might need 100+ chunks
   $top_k = max(100, (int)$limit * 50);
 
-  $matches = $vector_client->search($collection, $embedding, $top_k, $outputFields);
+  try {
+    $matches = $vector_client->search($collection, $embedding, $top_k, $outputFields);
+  }
+  catch (Exception $e) {
+    watchdog('openai_related_content', 'Vector search failed: @msg', ['@msg' => $e->getMessage()], WATCHDOG_ERROR);
+    return [];
+  }
+
+  if (empty($matches) || !is_array($matches)) {
+    return [];
+  }
 
   $related = [];
   $seen = [];
@@ -397,13 +548,14 @@ function openai_related_content_vector_search($embedding, $exclude_nid, $limit =
       continue;
     }
 
-    // Skip if we've already added this node (multiple chunks from same node)
+    // Skip if we've already added this node
     if (isset($seen[$nid])) {
       continue;
     }
 
     // Skip if this node is excluded (either per-node or URL-based)
-    if (openai_related_content_is_excluded($nid)) {
+    $excluded = openai_related_content_is_excluded($nid, TRUE);
+    if (!empty($excluded['excluded'])) {
       continue;
     }
 
@@ -436,7 +588,10 @@ function openai_related_content_vector_search($embedding, $exclude_nid, $limit =
 function openai_related_content_is_excluded($nid, $details = FALSE) {
   $nid = (int) $nid;
   if (!$nid) {
-    return $details ? ['excluded' => FALSE, 'methods' => []] : FALSE;
+    if ($details) {
+      return ['excluded' => FALSE, 'methods' => []];
+    }
+    return FALSE;
   }
 
   $methods = [];
@@ -630,37 +785,15 @@ function openai_related_content_test_form_submit($form, &$form_state) {
 
   $limit = (int) ($config->get('limit') ?: 3);
 
-  // Check if the test node itself is excluded
-  $is_excluded = openai_related_content_is_excluded($nid);
+  // Use existing is_excluded($nid, TRUE) to get details
   $exclusion_info = '';
-  if ($is_excluded) {
-    // Determine which method excluded it
-    $db_excluded = db_query("SELECT 1 FROM {openai_related_content_exclude} WHERE nid = :nid", [':nid' => $nid])->fetchField();
-    $url_excluded = FALSE;
-
-    $excluded_urls = $config->get('excluded_urls');
-    if (!empty($excluded_urls)) {
-      $node_path = 'node/' . $nid;
-      $node_alias = backdrop_get_path_alias($node_path);
-      $excluded_list = array_filter(array_map('trim', explode("\n", $excluded_urls)));
-      foreach ($excluded_list as $excluded) {
-        $excluded = ltrim($excluded, '/');
-        if ($excluded === $node_path || $excluded === $node_alias || '/' . $excluded === $node_alias || $excluded === ltrim($node_alias, '/')) {
-          $url_excluded = TRUE;
-          break;
-        }
-      }
-    }
-
-    $methods = [];
-    if ($db_excluded) $methods[] = 'per-node checkbox';
-    if ($url_excluded) $methods[] = 'URL-based exclusion';
-
+  $excluded_details = openai_related_content_is_excluded($nid, TRUE);
+  if (!empty($excluded_details['excluded'])) {
+    $methods = !empty($excluded_details['methods']) ? $excluded_details['methods'] : [];
     $exclusion_info = '<div class="messages warning"><strong>' . t('⚠ Note: This node is excluded from related content') . '</strong> (' . implode(', ', $methods) . ')</div>';
   }
 
-  $results_html = '<h3>' . t('Test Results for Node @nid: @title',
-    ['@nid' => $nid, '@title' => $test_node->title]) . '</h3>';
+  $results_html = '<h3>' . t('Test Results for Node @nid: @title', ['@nid' => $nid, '@title' => $test_node->title]) . '</h3>';
   $results_html .= $exclusion_info;
   $results_html .= '<p>' . t('Requesting @limit related items...', ['@limit' => $limit]) . '</p>';
 
@@ -668,8 +801,7 @@ function openai_related_content_test_form_submit($form, &$form_state) {
 
   if (empty($related)) {
     $results_html .= '<p><strong style="color: red;">' . t('No related content found.') . '</strong></p>';
-    $results_html .= '<p>' . t('Check the watchdog logs at <a href="@url">Recent log messages</a> for details.',
-      ['@url' => url('admin/reports/dblog')]) . '</p>';
+    $results_html .= '<p>' . t('Check the watchdog logs at <a href="@url">Recent log messages</a> for details.', ['@url' => url('admin/reports/dblog')]) . '</p>';
   } else {
     $results_html .= '<p><strong style="color: green;">' . t('✓ Found @count related items:', ['@count' => count($related)]) . '</strong></p>';
     $results_html .= '<ol>';
@@ -692,3 +824,74 @@ function openai_related_content_test_form_submit($form, &$form_state) {
   $form_state['rebuild'] = TRUE;
 }
 
+
+/**
+ * Helper: Invalidate related-content caches.
+ *
+ * If a specific $nid is provided, this will remove caches directly related
+ * to that node (rendered block and matches). When a node is updated or
+ * deleted, related recommendations site-wide may be affected; by default
+ * we clear all openai_related_content caches to ensure correctness. If you
+ * want a more targeted invalidation strategy, we can narrow this.
+ *
+ * @param int|null $nid
+ *   Node id to target, or NULL to clear all related caches.
+ */
+function openai_related_content_invalidate_caches($nid = NULL) {
+  if ($nid) {
+    // Remove the rendered block cache for that node.
+    db_delete('cache')->condition('cid', 'openai_related_content:' . (int) $nid, '=')->execute();
+
+    // Remove the match-list caches for that source node (limit/index vary).
+    db_delete('cache')->condition('cid', 'openai_related_content_matches:' . (int) $nid . ':%', 'LIKE')->execute();
+
+    // Also remove any global caches that could contain the node as a candidate.
+    // This is conservative but safe: it avoids showing deleted/changed nodes in
+    // other nodes' recommendations for up to the TTL.
+    db_delete('cache')->condition('cid', 'openai_related_content:%', 'LIKE')->execute();
+  }
+  else {
+    // Clear all module-related caches.
+    db_delete('cache')->condition('cid', 'openai_related_content:%', 'LIKE')->execute();
+    db_delete('cache')->condition('cid', 'openai_related_content_matches:%', 'LIKE')->execute();
+  }
+
+  watchdog('openai_related_content', 'Invalidated related-content caches for nid: @nid', ['@nid' => $nid ?: 'all'], WATCHDOG_NOTICE);
+}
+
+
+/**
+ * Implements hook_node_insert(). Clear caches so new content can be
+ * recommended by related-content searches.
+ */
+function openai_related_content_node_insert($node) {
+  if (empty($node->nid)) return;
+  // New content may appear in other nodes' recommendations; clear module caches.
+  openai_related_content_invalidate_caches();
+}
+
+
+/**
+ * Implements hook_node_update(). Clear caches so updated content is reflected
+ * in related-content results.
+ */
+function openai_related_content_node_update($node) {
+  if (empty($node->nid)) return;
+  // Clear caches conservatively to ensure recommendations are refreshed.
+  openai_related_content_invalidate_caches($node->nid);
+}
+
+
+/**
+ * Implements hook_node_delete(). Clear caches and remove any per-node
+ * exclusion records.
+ */
+function openai_related_content_node_delete($node) {
+  if (empty($node->nid)) return;
+
+  // Remove per-node exclusion entry if present.
+  db_delete('openai_related_content_exclude')->condition('nid', (int) $node->nid)->execute();
+
+  // Invalidate caches that may reference the deleted node.
+  openai_related_content_invalidate_caches();
+}
