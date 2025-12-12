@@ -27,14 +27,14 @@ class openai_related_content_handler_argument extends views_handler_argument_num
 
     // Load the source node
     $node = node_load($source_nid);
-    if (!$node) {
+    if (!$node || !node_access('view', $node)) {
       // Node not found - show no results
       $this->query->add_where(0, '1', '0', '=');
       return;
     }
 
-    // Get the limit from the view's pager
-    $limit = 3; // Default
+    // Get the limit from the view's pager (default to 3).
+    $limit = 3;
     if (!empty($this->view->pager['items_per_page'])) {
       $limit = (int) $this->view->pager['items_per_page'];
     }
@@ -43,6 +43,14 @@ class openai_related_content_handler_argument extends views_handler_argument_num
       if (!empty($pager['options']['items_per_page'])) {
         $limit = (int) $pager['options']['items_per_page'];
       }
+    }
+
+    // Ensure $limit is a safe positive integer. If pager indicates "display
+    // all" (0) or a negative value, fall back to a safe default of 3 so we
+    // never pass 0 to openai_related_content_get_related_matches().
+    $limit = (int) $limit;
+    if ($limit < 1) {
+      $limit = 3;
     }
 
     // Get related node IDs
@@ -71,7 +79,7 @@ class openai_related_content_handler_argument extends views_handler_argument_num
     }
 
     // Add WHERE clause to filter by these NIDs
-    $this->query->add_where(0, 'node.nid', $nids, 'IN');
+    $this->query->add_where(0, "$this->table_alias.$this->real_field", $nids, 'IN');
   }
 
   /**
@@ -80,7 +88,7 @@ class openai_related_content_handler_argument extends views_handler_argument_num
   function title() {
     if (is_numeric($this->argument) && $this->argument > 0) {
       $node = node_load($this->argument);
-      if ($node) {
+      if ($node && node_access('view', $node)) {
         return check_plain($node->title);
       }
     }
