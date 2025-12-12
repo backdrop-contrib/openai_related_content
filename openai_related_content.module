@@ -877,7 +877,6 @@ function openai_related_content_node_update($node) {
   openai_related_content_invalidate_caches($node->nid);
 }
 
-
 /**
  * Implements hook_node_delete(). Clear caches and remove any per-node
  * exclusion records.
