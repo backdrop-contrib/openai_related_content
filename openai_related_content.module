@@ -823,7 +823,6 @@ function openai_related_content_test_form_submit($form, &$form_state) {
   $form_state['rebuild'] = TRUE;
 }
 
-
 /**
  * Helper: Invalidate related-content caches.
  *
