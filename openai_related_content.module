@@ -210,96 +210,13 @@ function openai_related_content_views_api() {
 
 /**
  * Implements hook_autoload_info().
- *
- * Belt-and-suspenders autoload registration to ensure Views can load our
- * argument default plugin class on all environments. While we already hint
- * the file via hook_views_plugins(), some setups cache class discovery more
- * aggressively. This guarantees the class is always resolvable.
  */
 function openai_related_content_autoload_info() {
-  $base = backdrop_get_path('module', 'openai_related_content');
   return [
-    // Class used by the Views argument default plugin.
-    // NOTE: hook_autoload_info() expects paths RELATIVE to the module
-    // directory. Returning an absolute/prefixed path will cause Backdrop to
-    // prepend the module path again, leading to doubled paths like
-    // modules/contrib/openai_related_content/modules/contrib/... and a fatal
-    // include error. Use a relative path here.
-    'openai_related_content_plugin_argument_default_related' => 'includes/plugins/argument_default/openai_related_content_plugin_argument_default_related.inc',
-    'openai_related_content_argument' => 'includes/plugins/argument/openai_related_content_argument.inc',
+    'openai_related_content_handler_argument' => 'includes/openai_related_content_handler_argument.inc',
   ];
 }
 
-/**
- * Implements hook_requirements().
- *
- * Surface a status check to help admins confirm the Views plugin is available
- * and the module is configured.
- */
-function openai_related_content_requirements($phase) {
-  $requirements = [];
-
-  if ($phase === 'runtime') {
-    // Check that the Views plugin is registered.
-    $plugin_ok = FALSE;
-    if (module_exists('views') && function_exists('views_get_plugins')) {
-      $plugins = views_get_plugins('argument default');
-      $plugin_ok = isset($plugins['openai_related_content_related']);
-    }
-
-    $requirements['openai_related_content_views_plugin'] = [
-      'title' => t('OpenAI Related Content: Views plugin'),
-      'value' => $plugin_ok ? t('Available') : t('Not found'),
-      'severity' => $plugin_ok ? 0 : 1, // 0 = OK, 1 = WARNING in Backdrop
-      'description' => $plugin_ok
-        ? t('The Views default value provider "OpenAI: Related node IDs" is available for the contextual filter "Content: Nid".')
-        : t('The Views default value provider "OpenAI: Related node IDs" was not detected. Clear caches. If it still does not appear in Views, ensure the module files are readable and that Views is enabled.'),
-    ];
-
-    // Basic configuration sanity check.
-    $config = config('openai_related_content.settings');
-    $index_id = $config->get('index_id');
-    $requirements['openai_related_content_config'] = [
-      'title' => t('OpenAI Related Content: configuration'),
-      'value' => $index_id ? t('Configured') : t('Incomplete'),
-      'severity' => $index_id ? 0 : 1, // 0 = OK, 1 = WARNING in Backdrop
-      'description' => $index_id
-        ? t('Search API index is set to @id.', ['@id' => $index_id])
-        : t('No Search API index configured. Visit /admin/config/content/openai-related-content to configure.'),
-    ];
-  }
-
-  return $requirements;
-}
-
-/**
- * Implements hook_views_plugins().
- *
- * Declare the Views plugins.
- */
-function openai_related_content_views_plugins() {
-  $path = backdrop_get_path('module', 'openai_related_content') . '/includes/plugins';
-  return [
-    'argument default' => [
-      'openai_related_content_related' => [
-        'title' => t('OpenAI: Related node IDs'),
-        'help' => t('Provides a comma-separated list of related node IDs for the current node using vector similarity and respects the module\'s exclusion setting.'),
-        'handler' => 'openai_related_content_plugin_argument_default_related',
-        'path' => $path . '/argument_default',
-        'file' => 'openai_related_content_plugin_argument_default_related.inc',
-      ],
-    ],
-    'argument' => [
-      'openai_related_content_argument' => [
-        'title' => t('OpenAI: Related Content Argument'),
-        'help' => t('Converts a node ID to related node IDs using vector similarity.'),
-        'handler' => 'openai_related_content_argument',
-        'path' => $path . '/argument',
-        'file' => 'openai_related_content_argument.inc',
-      ],
-    ],
-  ];
-}
 
 function openai_related_content_block_info() {
   return [
@@ -516,16 +433,18 @@ function openai_related_content_vector_search($embedding, $exclude_nid, $limit =
  * @param int $nid
  * @return bool
  */
-function openai_related_content_is_excluded($nid) {
+function openai_related_content_is_excluded($nid, $details = FALSE) {
   $nid = (int) $nid;
   if (!$nid) {
-    return FALSE;
+    return $details ? ['excluded' => FALSE, 'methods' => []] : FALSE;
   }
 
-  // Check per-node exclusion flag
+  $methods = [];
+
+  // Check per-node exclusion flag (database)
   $result = db_query("SELECT 1 FROM {openai_related_content_exclude} WHERE nid = :nid", [':nid' => $nid])->fetchField();
   if ($result) {
-    return TRUE;
+    $methods[] = 'per-node checkbox';
   }
 
   // Check URL-based exclusions from settings
@@ -534,36 +453,42 @@ function openai_related_content_is_excluded($nid) {
 
   if (!empty($excluded_urls)) {
     $node = node_load($nid);
-    if (!$node) {
-      return FALSE;
-    }
+    if ($node) {
+      // Get the node's URL/path and alias
+      $node_path = 'node/' . $nid;
+      $node_alias = backdrop_get_path_alias($node_path);
 
-    // Get the node's URL/path
-    $node_path = 'node/' . $nid;
-    $node_alias = backdrop_get_path_alias($node_path);
+      // Parse the excluded URLs (one per line)
+      $excluded_list = array_filter(array_map('trim', explode("\n", $excluded_urls)));
 
-    // Parse the excluded URLs (one per line)
-    $excluded_list = array_filter(array_map('trim', explode("\n", $excluded_urls)));
+      foreach ($excluded_list as $excluded) {
+        // Normalize both paths for comparison (remove leading slash and trim)
+        $excluded_normalized = ltrim(trim($excluded), '/');
+        $alias_normalized = ltrim(trim($node_alias), '/');
+        $path_normalized = ltrim(trim($node_path), '/');
 
-    foreach ($excluded_list as $excluded) {
-      // Normalize both paths for comparison (remove leading slash and trim)
-      $excluded_normalized = ltrim(trim($excluded), '/');
-      $alias_normalized = ltrim(trim($node_alias), '/');
-      $path_normalized = ltrim(trim($node_path), '/');
+        // Check if it matches the internal path (node/123)
+        if ($excluded_normalized === $path_normalized) {
+          $methods[] = 'URL-based exclusion';
+          break;
+        }
 
-      // Check if it matches the internal path (node/123)
-      if ($excluded_normalized === $path_normalized) {
-        return TRUE;
-      }
-
-      // Check if it matches the alias (posts/my-post)
-      if ($excluded_normalized === $alias_normalized) {
-        return TRUE;
+        // Check if it matches the alias (posts/my-post)
+        if ($excluded_normalized === $alias_normalized) {
+          $methods[] = 'URL-based exclusion';
+          break;
+        }
       }
     }
   }
 
-  return FALSE;
+  $excluded = !empty($methods);
+
+  if ($details) {
+    return ['excluded' => (bool) $excluded, 'methods' => $methods];
+  }
+
+  return (bool) $excluded;
 }
 
 /**

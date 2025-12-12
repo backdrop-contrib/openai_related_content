@@ -41,8 +41,10 @@ function openai_related_content_update_7001() {
  * Implements hook_install().
  *
  * Backdrop automatically installs default configuration shipped in
- * config/install when a module is enabled. We do not manually copy config
- * files to the active directory here.
+ * config/install when a module is enabled. Additionally, Backdrop will
+ * automatically create any database tables declared in `hook_schema()`
+ * during module installation, so there is no need to manually copy
+ * configuration files or create schema here. The function can remain empty.
  */
 function openai_related_content_install() {
   // No action needed.
