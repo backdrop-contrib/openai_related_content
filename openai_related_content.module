@@ -646,7 +646,10 @@ function openai_related_content_is_excluded($nid, $details = FALSE) {
  * Set excluded flag for a node.
  *
  * @param int $nid
+ *   The node ID.
  * @param bool $excluded
+ *   Whether to exclude the node.
+ * @return void
  */
 function openai_related_content_set_excluded($nid, $excluded) {
   $nid = (int) $nid;
