@@ -1,7 +1,8 @@
 {
     "_config_name": "views.view.openai_related_content",
     "name": "openai_related_content",
-    "description": "Displays OpenAI-related nodes in a grid layout. Used for showing related content based on the current node.",    "tag": "",
+    "description": "Displays OpenAI-related nodes in a grid layout. Used for showing related content based on the current node.",
+    "tag": "",
     "disabled": false,
     "base_table": "node",
     "human_name": "OpenAI Related Content",
