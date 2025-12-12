@@ -21,11 +21,7 @@
                     "perm": "access content"
                 },
                 "cache": {
-                    "type": "time",
-                    "results_lifespan": "custom",
-                    "results_lifespan_custom": "604800",
-                    "output_lifespan": "custom",
-                    "output_lifespan_custom": "604800"
+                    "type": "none"
                 },
                 "exposed_form": {
                     "type": "basic"
@@ -166,10 +162,7 @@
                     }
                 },
                 "cache": {
-                    "type": "time",
-                    "options": {
-                        "expire": "604800"
-                    }
+                    "type": "none"
                 }
             }
         }
