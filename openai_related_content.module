@@ -519,7 +519,8 @@ function openai_related_content_vector_search($embedding, $exclude_nid, $limit =
   }
 
   $outputFields = ['nid', 'title'];
-  $top_k = max(100, (int)$limit * 50);
+  // Cap top_k to a maximum of 500 to avoid excessive resource usage.
+  $top_k = min(500, max(100, (int)$limit * 50));
 
   try {
     $matches = $vector_client->search($collection, $embedding, $top_k, $outputFields);
