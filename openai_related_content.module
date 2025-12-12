@@ -540,23 +540,18 @@ function openai_related_content_vector_search($embedding, $exclude_nid, $limit =
     $nid = $match['nid'] ?? NULL;
     $title = $match['title'] ?? '';
 
-    if (!$nid) {
-      continue;
-    }
-
-    // Skip if it's the current node
-    if ((string)$nid === (string)$exclude_nid) {
-      continue;
-    }
-
-    // Skip if we've already added this node
-    if (isset($seen[$nid])) {
-      continue;
-    }
-
-    // Skip if this node is excluded (either per-node or URL-based)
+    // Skip if:
+    // - no nid
+    // - it's the current node
+    // - we've already added this node
+    // - this node is excluded (either per-node or URL-based)
     $excluded = openai_related_content_is_excluded($nid, TRUE);
-    if (!empty($excluded['excluded'])) {
+    if (
+      !$nid ||
+      (string)$nid === (string)$exclude_nid ||
+      isset($seen[$nid]) ||
+      !empty($excluded['excluded'])
+    ) {
       continue;
     }
 
