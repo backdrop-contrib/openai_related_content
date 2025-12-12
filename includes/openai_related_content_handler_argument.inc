@@ -11,7 +11,16 @@
 class openai_related_content_handler_argument extends views_handler_argument_numeric {
 
   /**
-   * Override query to filter by related node IDs.
+   * Overrides views_handler_argument_numeric::query().
+   *
+   * Filters the view results to only include nodes related to the given node,
+   * as determined by OpenAI embeddings and the related content index.
+   *
+   * @param bool $group_by
+   *   (optional) Whether the query should use GROUP BY. Passed from Views.
+   *
+   * @return void
+   *   This method does not return a value; it modifies the query object in place.
    */
   function query($group_by = FALSE) {
     $this->ensure_my_table();
