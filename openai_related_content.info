@@ -1,7 +1,10 @@
 name = OpenAI Related Content
-description = Displays 3 related nodes using OpenAI embeddings and Zilliz vector search.
+description = Displays 3 related nodes using OpenAI embeddings and vector search.
 backdrop = 1.x
 package = OpenAI
 dependencies[] = openai
 dependencies[] = search_api
 dependencies[] = search_api_ai
+dependencies[] = views
+configure = admin/config/content/openai-related-content
+

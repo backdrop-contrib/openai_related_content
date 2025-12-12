@@ -1,0 +1,49 @@
+<?php
+
+/**
+ * @file
+ * Install, update and uninstall functions for the OpenAI Related Content module.
+ */
+
+/**
+ * Implements hook_schema().
+ */
+function openai_related_content_schema() {
+  $schema = [];
+
+  $schema['openai_related_content_exclude'] = [
+    'description' => 'Nodes excluded from appearing in AI-related content recommendations.',
+    'fields' => [
+      'nid' => [
+        'description' => 'Node ID.',
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+      ],
+    ],
+    'primary key' => ['nid'],
+  ];
+
+  return $schema;
+}
+
+/**
+ * Create exclusion table.
+ */
+function openai_related_content_update_7001() {
+  $schema = openai_related_content_schema();
+  if (!db_table_exists('openai_related_content_exclude')) {
+    db_create_table('openai_related_content_exclude', $schema['openai_related_content_exclude']);
+  }
+}
+
+/**
+ * Implements hook_install().
+ *
+ * Backdrop automatically installs default configuration shipped in
+ * config/install when a module is enabled. We do not manually copy config
+ * files to the active directory here.
+ */
+function openai_related_content_install() {
+  // No action needed.
+}
