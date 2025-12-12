@@ -57,7 +57,7 @@ If you change behavior, confirm these before merging:
 ## Views capability
 
 - **New:** The module includes Views integration to provide a configurable listing of related content. Look for view default definitions and helpers under the `includes` directory and the `config/install` folder where a default view export (`views.view.openai_related_content_related.json`) is provided.
-- **Files:** The Views integration is implemented via `includes/openai_related_content.views.inc` and `includes/openai_related_content.views_default.inc` and the exported view lives at `config/install/views.view.openai_related_content_related.json`.
-- **When editing:** If you change view handlers, argument plugins, or the view export, update the exported JSON and ensure any Views plugin classes under `includes/plugins/` remain compatible.
+- **Files:** The Views integration is implemented via `includes/openai_related_content.views.inc` and `includes/openai_related_content_handler_argument.inc`, and the exported view lives at `config/install/views.view.openai_related_content_related.json`.
+- **When editing:** If you change view handlers, argument plugins, or the view export, update the exported JSON and ensure any Views plugin classes (if present) under the `includes` directory remain compatible.
 
 If anything here is unclear or you want the instructions to include additional examples (e.g., sample Drush commands, a small test harness, or a note on the vector DB ingestion process), tell me what to expand and I will iterate.
