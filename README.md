@@ -1,7 +1,7 @@
 
 # OpenAI Related Content
 
-Displays related nodes using Search API AI.
+Displays related nodes using OpenAI embeddings and a vector search.
 
 ## Installation
 

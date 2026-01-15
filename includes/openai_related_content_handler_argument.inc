@@ -11,23 +11,14 @@
 class openai_related_content_handler_argument extends views_handler_argument_numeric {
 
   /**
-   * Overrides views_handler_argument_numeric::query().
-   *
-   * Filters the view results to only include nodes related to the given node,
-   * as determined by OpenAI embeddings and the related content index.
-   *
-   * @param bool $group_by
-   *   (optional) Whether the query should use GROUP BY. Passed from Views.
-   *
-   * @return void
-   *   This method does not return a value; it modifies the query object in place.
+   * Override query to filter by related node IDs.
    */
   function query($group_by = FALSE) {
     $this->ensure_my_table();
 
     // Get the source node ID from the argument
     $source_nid = $this->argument;
-    
+
     if (!is_numeric($source_nid) || $source_nid <= 0) {
       // Invalid argument - show no results
       $this->query->add_where(0, '1', '0', '=');

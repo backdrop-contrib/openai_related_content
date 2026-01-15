@@ -519,8 +519,7 @@ function openai_related_content_vector_search($embedding, $exclude_nid, $limit =
   }
 
   $outputFields = ['nid', 'title'];
-  // Cap top_k to a maximum of 500 to avoid excessive resource usage.
-  $top_k = min(500, max(100, (int)$limit * 50));
+  $top_k = max(100, (int)$limit * 50);
 
   try {
     $matches = $vector_client->search($collection, $embedding, $top_k, $outputFields);
@@ -540,18 +539,23 @@ function openai_related_content_vector_search($embedding, $exclude_nid, $limit =
     $nid = $match['nid'] ?? NULL;
     $title = $match['title'] ?? '';
 
-    // Skip if:
-    // - no nid
-    // - it's the current node
-    // - we've already added this node
-    // - this node is excluded (either per-node or URL-based)
+    if (!$nid) {
+      continue;
+    }
+
+    // Skip if it's the current node
+    if ((string)$nid === (string)$exclude_nid) {
+      continue;
+    }
+
+    // Skip if we've already added this node
+    if (isset($seen[$nid])) {
+      continue;
+    }
+
+    // Skip if this node is excluded (either per-node or URL-based)
     $excluded = openai_related_content_is_excluded($nid, TRUE);
-    if (
-      !$nid ||
-      (string)$nid === (string)$exclude_nid ||
-      isset($seen[$nid]) ||
-      !empty($excluded['excluded'])
-    ) {
+    if (!empty($excluded['excluded'])) {
       continue;
     }
 
@@ -646,10 +650,7 @@ function openai_related_content_is_excluded($nid, $details = FALSE) {
  * Set excluded flag for a node.
  *
  * @param int $nid
- *   The node ID.
  * @param bool $excluded
- *   Whether to exclude the node.
- * @return void
  */
 function openai_related_content_set_excluded($nid, $excluded) {
   $nid = (int) $nid;
@@ -823,6 +824,7 @@ function openai_related_content_test_form_submit($form, &$form_state) {
   $form_state['rebuild'] = TRUE;
 }
 
+
 /**
  * Helper: Invalidate related-content caches.
  *
@@ -878,6 +880,7 @@ function openai_related_content_node_update($node) {
   // Clear caches conservatively to ensure recommendations are refreshed.
   openai_related_content_invalidate_caches($node->nid);
 }
+
 
 /**
  * Implements hook_node_delete(). Clear caches and remove any per-node
