@@ -994,7 +994,7 @@ function openai_related_content_test_form($form, &$form_state) {
     $index = search_api_index_load($index_id);
     if ($index && $index->server()) {
       $backend_type = strtolower($index->server()->class);
-      $backend_info = '<li><strong>Backend Type:</strong> <span style="color: blue;">' . ucfirst($backend_type) . '</span></li>';
+      $backend_info = '<li><strong>Backend Type:</strong> <span style="color: blue;">' . check_plain(ucfirst($backend_type)) . '</span></li>';
     }
   }
 
