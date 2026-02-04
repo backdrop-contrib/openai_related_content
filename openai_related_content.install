@@ -67,7 +67,7 @@ function openai_related_content_install() {
 /**
  * Set the default view display if not already set.
  */
-function openai_related_content_update_1001() {
+function openai_related_content_update_7002() {
   $config = config('openai_related_content.settings');
   openai_related_content_ensure_view_display($config);
 }
