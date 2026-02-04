@@ -1050,7 +1050,6 @@ function openai_related_content_test_form($form, &$form_state) {
       '<ul>' .
       '<li>' . l(t('View all recent log messages'), 'admin/reports/dblog') . '</li>' .
       '<li>' . l(t('View openai_related_content logs'), 'admin/reports/dblog', ['query' => ['type' => ['openai_related_content']]]) . '</li>' .
-      '<li>' . t('Clear related content cache: <code>ddev mysql -e "DELETE FROM cache WHERE cid LIKE \'openai_related_content:%\';"</code>') . '</li>' .
       '</ul>',
   ];
 
