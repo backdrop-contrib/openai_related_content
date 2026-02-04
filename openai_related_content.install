@@ -47,5 +47,20 @@ function openai_related_content_update_7001() {
  * configuration files or create schema here. The function can remain empty.
  */
 function openai_related_content_install() {
-  // No action needed.
+  $config = config('openai_related_content.settings');
+  if ($config->get('view_display') === '') {
+    $config->set('view_display', 'openai_related_content:block_1');
+    $config->save();
+  }
+}
+
+/**
+ * Set the default view display if not already set.
+ */
+function openai_related_content_update_1001() {
+  $config = config('openai_related_content.settings');
+  if ($config->get('view_display') === '') {
+    $config->set('view_display', 'openai_related_content:block_1');
+    $config->save();
+  }
 }

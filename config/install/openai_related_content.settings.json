@@ -3,7 +3,7 @@
   "index_id": "",
   "collection_name": "",
   "limit": 3,
-  "view_display": "",
+  "view_display": "openai_related_content:block_1",
   "excluded_urls": []
 }
 
