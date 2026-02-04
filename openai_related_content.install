@@ -47,11 +47,12 @@ function openai_related_content_ensure_view_display(Config $config) {
   if (empty($config->get('view_display'))) {
     $config->set('view_display', 'openai_related_content:block_1');
     $config->save();
-  $config = config('openai_related_content.settings');
-  if (empty($config->get('view_display'))) {
-    $config->set('view_display', 'openai_related_content:block_1');
-    $config->save();
-  } *
+  }
+}
+
+/**
+ * Implements hook_install().
+ *
  * Backdrop automatically installs default configuration shipped in
  * config/install when a module is enabled. Additionally, Backdrop will
  * automatically create any database tables declared in `hook_schema()`
