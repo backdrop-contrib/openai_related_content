@@ -38,8 +38,20 @@ function openai_related_content_update_7001() {
 }
 
 /**
- * Implements hook_install().
+ * Ensure the view_display config is set to a default value.
  *
+ * @param Config $config
+ *   The openai_related_content.settings config object.
+ */
+function openai_related_content_ensure_view_display(Config $config) {
+  if (empty($config->get('view_display'))) {
+    $config->set('view_display', 'openai_related_content:block_1');
+    $config->save();
+  $config = config('openai_related_content.settings');
+  if (empty($config->get('view_display'))) {
+    $config->set('view_display', 'openai_related_content:block_1');
+    $config->save();
+  } *
  * Backdrop automatically installs default configuration shipped in
  * config/install when a module is enabled. Additionally, Backdrop will
  * automatically create any database tables declared in `hook_schema()`
@@ -48,10 +60,7 @@ function openai_related_content_update_7001() {
  */
 function openai_related_content_install() {
   $config = config('openai_related_content.settings');
-  if ($config->get('view_display') === '') {
-    $config->set('view_display', 'openai_related_content:block_1');
-    $config->save();
-  }
+  openai_related_content_ensure_view_display($config);
 }
 
 /**
@@ -59,8 +68,5 @@ function openai_related_content_install() {
  */
 function openai_related_content_update_1001() {
   $config = config('openai_related_content.settings');
-  if ($config->get('view_display') === '') {
-    $config->set('view_display', 'openai_related_content:block_1');
-    $config->save();
-  }
+  openai_related_content_ensure_view_display($config);
 }
