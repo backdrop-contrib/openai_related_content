@@ -772,7 +772,6 @@ function openai_related_content_vector_search($embedding, $exclude_nid, $limit =
   $server_class = strtolower($server->class);
 
   // Determine which vector client to use based on server class
-  $vector_client = NULL;
   $matches = [];
 
   // Route to the appropriate backend search function
