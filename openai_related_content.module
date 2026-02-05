@@ -696,11 +696,8 @@ function openai_related_content_get_embedding($text) {
       }
     }
 
-    // Truncate text if too long (OpenAI has token limits).
+    // The text has already been truncated by openai_related_content_get_text().
     $text_for_embedding = $text;
-    if (strlen($text_for_embedding) > 8000) {
-      $text_for_embedding = substr($text_for_embedding, 0, 8000);
-    }
 
     // Call embedding method with correct parameter order: (text, model)
     $result = $openai_api->embedding($text_for_embedding, $embeddings_model);
