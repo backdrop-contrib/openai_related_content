@@ -452,8 +452,15 @@ function openai_related_content_get_text($node) {
   $combined = implode(' ', $text_parts);
 
   // Truncate to a reasonable length for embeddings (8000 chars is safe for most models).
-  if (strlen($combined) > 8000) {
-    $combined = substr($combined, 0, 8000);
+  if (function_exists('mb_strlen')) {
+    if (mb_strlen($combined, 'UTF-8') > 8000) {
+      $combined = mb_substr($combined, 0, 8000, 'UTF-8');
+    }
+  }
+  else {
+    if (strlen($combined) > 8000) {
+      $combined = substr($combined, 0, 8000);
+    }
   }
 
   return $combined;
