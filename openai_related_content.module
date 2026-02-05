@@ -958,10 +958,6 @@ function openai_related_content_pinecone_search($server, $index, $embedding, $li
           elseif (preg_match('/entity[:\-_]?node[:\-_\/]?(\d+)/i', $match['id'], $m)) {
             $nid = $m[1];
           }
-          elseif (preg_match('/(\d+)/', $match['id'], $m)) {
-            // Last resort: extract any number from the ID
-            $nid = $m[1];
-          }
         }
 
         $title = $metadata['title'] ?? '';
