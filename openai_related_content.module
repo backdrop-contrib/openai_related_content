@@ -702,11 +702,6 @@ function openai_related_content_get_embedding($text) {
       $text_for_embedding = substr($text_for_embedding, 0, 8000);
     }
 
-    watchdog('openai_related_content', 'Requesting embedding: model=@model, text_length=@len', [
-      '@model' => $embeddings_model,
-      '@len' => strlen($text_for_embedding),
-    ], WATCHDOG_DEBUG);
-
     // Call embedding method with correct parameter order: (text, model)
     $result = $openai_api->embedding($text_for_embedding, $embeddings_model);
 
@@ -722,7 +717,6 @@ function openai_related_content_get_embedding($text) {
     if (isset($result['data'][0]['embedding'])) {
       // Full API response structure - extract the vector.
       $result = $result['data'][0]['embedding'];
-      watchdog('openai_related_content', 'Extracted embedding from nested structure.', [], WATCHDOG_DEBUG);
     }
 
     // Final validation: ensure it's a flat array of numbers.
@@ -733,9 +727,6 @@ function openai_related_content_get_embedding($text) {
       return NULL;
     }
 
-    watchdog('openai_related_content', 'Embedding generated successfully: @dims dimensions', [
-      '@dims' => count($result),
-    ], WATCHDOG_DEBUG);
 
     return $result;
   }
@@ -847,18 +838,7 @@ function openai_related_content_milvus_search($server, $collection, $embedding, 
     $outputFields = ['nid', 'title', 'entity_id', 'entity_type', 'backdrop_entity_id', 'backdrop_long_id'];
     $top_k = max(100, (int)$limit * 50);
 
-    watchdog('openai_related_content', 'Milvus search: collection=@collection, top_k=@topk, embedding_length=@len', [
-      '@collection' => $collection,
-      '@topk' => $top_k,
-      '@len' => count($embedding),
-    ], WATCHDOG_DEBUG);
-
     $matches = $vector_client->search($collection, $embedding, $top_k, $outputFields);
-
-    watchdog('openai_related_content', 'Milvus search raw results: @count matches, data: @data', [
-      '@count' => is_array($matches) ? count($matches) : 'not-array',
-      '@data' => is_array($matches) ? json_encode(array_slice($matches, 0, 3)) : print_r($matches, TRUE),
-    ], WATCHDOG_DEBUG);
 
     // Normalize results: extract nid from various possible field structures.
     $normalized = [];
@@ -893,9 +873,6 @@ function openai_related_content_milvus_search($server, $collection, $embedding, 
       }
     }
 
-    watchdog('openai_related_content', 'Milvus search normalized: @count results', [
-      '@count' => count($normalized),
-    ], WATCHDOG_DEBUG);
 
     return $normalized;
   }
@@ -949,13 +926,6 @@ function openai_related_content_pinecone_search($server, $index, $embedding, $li
 
     $top_k = max(100, (int)$limit * 50);
 
-    watchdog('openai_related_content', 'Pinecone search: namespace=@ns, dimension=@dim, top_k=@topk, embedding_length=@len', [
-      '@ns' => $namespace,
-      '@dim' => $dimension,
-      '@topk' => $top_k,
-      '@len' => count($embedding),
-    ], WATCHDOG_DEBUG);
-
     $query_params = [
       'vector' => $embedding,
       'top_k' => $top_k,
@@ -965,11 +935,6 @@ function openai_related_content_pinecone_search($server, $index, $embedding, $li
     ];
 
     $result = $vector_client->query($query_params);
-
-    watchdog('openai_related_content', 'Pinecone raw response: matches_count=@count, sample=@sample', [
-      '@count' => isset($result['matches']) ? count($result['matches']) : 0,
-      '@sample' => isset($result['matches'][0]) ? json_encode($result['matches'][0]) : 'none',
-    ], WATCHDOG_DEBUG);
 
     // Pinecone returns results in 'matches' array
     $matches = [];
@@ -1008,15 +973,9 @@ function openai_related_content_pinecone_search($server, $index, $embedding, $li
           'nid' => $nid,
           'title' => $title,
           'score' => $match['score'] ?? 0,
-          '_debug_id' => $match['id'] ?? 'unknown',
         ];
       }
     }
-
-    watchdog('openai_related_content', 'Pinecone normalized: @count matches with nids, first_few=@sample', [
-      '@count' => count(array_filter($matches, function($m) { return !empty($m['nid']); })),
-      '@sample' => json_encode(array_slice($matches, 0, 3)),
-    ], WATCHDOG_DEBUG);
 
     return $matches;
   }
@@ -1039,23 +998,12 @@ function openai_related_content_vector_search($embedding, $exclude_nid, $limit =
     return [];
   }
 
-  watchdog('openai_related_content', 'Vector search: embedding has @count dimensions, exclude_nid=@nid, limit=@limit', [
-    '@count' => count($embedding),
-    '@nid' => $exclude_nid,
-    '@limit' => $limit,
-  ], WATCHDOG_DEBUG);
-
   // Get config
   $config = config('openai_related_content.settings');
   if (!$index_id) {
     $index_id = $config->get('index_id') ?: 'milvus_search_2';
   }
   $collection = $config->get('collection_name') ?: 'amafoundation';
-
-  watchdog('openai_related_content', 'Vector search config: index_id=@index, collection=@collection', [
-    '@index' => $index_id,
-    '@collection' => $collection,
-  ], WATCHDOG_DEBUG);
 
   // Load the Search API index and get the server
   if (!function_exists('search_api_index_load')) {
@@ -1089,9 +1037,6 @@ function openai_related_content_vector_search($embedding, $exclude_nid, $limit =
   }
 
   if (empty($matches)) {
-    watchdog('openai_related_content', 'Vector search returned empty matches from @backend', [
-      '@backend' => $server_class,
-    ], WATCHDOG_DEBUG);
     return [];
   }
 
@@ -1099,56 +1044,38 @@ function openai_related_content_vector_search($embedding, $exclude_nid, $limit =
     return [];
   }
 
-  watchdog('openai_related_content', 'Processing @count raw matches for filtering', [
-    '@count' => count($matches),
-  ], WATCHDOG_DEBUG);
-
   $related = [];
   $seen = [];
-  $filter_stats = [
-    'no_nid' => 0,
-    'is_current' => 0,
-    'duplicate' => 0,
-    'excluded' => 0,
-    'unpublished' => 0,
-    'accepted' => 0,
-  ];
 
   foreach ($matches as $match) {
     $nid = $match['nid'] ?? NULL;
     $title = $match['title'] ?? '';
 
     if (!$nid) {
-      $filter_stats['no_nid']++;
       continue;
     }
 
     // Skip if it's the current node
     if ((string)$nid === (string)$exclude_nid) {
-      $filter_stats['is_current']++;
       continue;
     }
 
     // Skip if we've already added this node
     if (isset($seen[$nid])) {
-      $filter_stats['duplicate']++;
       continue;
     }
 
     // Skip if this node is excluded (either per-node or URL-based)
     $excluded = openai_related_content_is_excluded($nid, TRUE);
     if (!empty($excluded['excluded'])) {
-      $filter_stats['excluded']++;
       continue;
     }
 
     $related_node = node_load($nid);
     if (!$related_node || empty($related_node->status)) {
-      $filter_stats['unpublished']++;
       continue;
     }
 
-    $filter_stats['accepted']++;
     $related[] = ['nid' => $nid, 'title' => $title];
     $seen[$nid] = TRUE;
 
@@ -1157,14 +1084,6 @@ function openai_related_content_vector_search($embedding, $exclude_nid, $limit =
     }
   }
 
-  watchdog('openai_related_content', 'Filter stats: no_nid=@no_nid, current=@current, dup=@dup, excluded=@excluded, unpub=@unpub, accepted=@accepted', [
-    '@no_nid' => $filter_stats['no_nid'],
-    '@current' => $filter_stats['is_current'],
-    '@dup' => $filter_stats['duplicate'],
-    '@excluded' => $filter_stats['excluded'],
-    '@unpub' => $filter_stats['unpublished'],
-    '@accepted' => $filter_stats['accepted'],
-  ], WATCHDOG_DEBUG);
 
   return $related;
 }
