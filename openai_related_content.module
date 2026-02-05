@@ -1341,7 +1341,7 @@ function openai_related_content_test_form_submit($form, &$form_state) {
   $text = openai_related_content_get_text($test_node);
   $text_preview = strlen($text) > 500 ? substr($text, 0, 500) . '...' : $text;
   $results_html .= '<p><strong>Text length:</strong> ' . strlen($text) . ' characters</p>';
-  $results_html .= '<details><summary>Text preview (first 500 chars)</summary><pre style="white-space: pre-wrap; background: #f5f5f5; padding: 10px; max-height: 200px; overflow: auto;">' . check_plain($text_preview) . '</pre></details>';
+  $results_html .= '<details><summary>Text preview (first 500 chars)</summary><pre style="white-space: pre-wrap; word-wrap: break-word; overflow-wrap: break-word; background: #f5f5f5; padding: 10px; max-height: 200px; overflow: auto;">' . check_plain($text_preview) . '</pre></details>';
 
   if (empty($text) || strlen($text) < 50) {
     $results_html .= '<p style="color: orange;"><strong>⚠ Warning:</strong> Very little text extracted. This may result in poor embeddings.</p>';
