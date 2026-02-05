@@ -389,16 +389,166 @@ function openai_related_content_get_related_matches($node, $limit = 3, $index_id
 /**
  * Extracts the text from a node for embedding.
  *
+ * This function renders the node and extracts all visible text content,
+ * making it compatible with nodes that use Paragraphs, Layout Builder,
+ * or any field-based content structure - not just the body field.
+ *
  * @param object $node
+ *   The node object.
  * @return string
+ *   The extracted text content.
  */
 function openai_related_content_get_text($node) {
-  // Use title and body. Adjust if you want more fields.
-  $fields = [$node->title];
-  if (!empty($node->body['und'][0]['safe_value'])) {
-    $fields[] = strip_tags($node->body['und'][0]['safe_value']);
+  $text_parts = [];
+
+  // Always include the title.
+  if (!empty($node->title)) {
+    $text_parts[] = $node->title;
   }
-  return implode(' ', $fields);
+
+  // Try to get text from the rendered node content.
+  // This captures Paragraphs, Layout Builder, and all field output.
+  try {
+    // Build the node content in 'full' view mode for best text extraction.
+    $build = node_view($node, 'full');
+
+    // Remove elements that shouldn't contribute to semantic content.
+    unset($build['links']);
+    unset($build['comments']);
+    unset($build['#contextual_links']);
+
+    // Render the content.
+    $rendered = backdrop_render($build);
+
+    // Strip HTML tags and decode entities to get plain text.
+    $plain_text = html_entity_decode(strip_tags($rendered), ENT_QUOTES, 'UTF-8');
+
+    // Normalize whitespace.
+    $plain_text = preg_replace('/\s+/', ' ', $plain_text);
+    $plain_text = trim($plain_text);
+
+    if (!empty($plain_text)) {
+      $text_parts[] = $plain_text;
+    }
+  }
+  catch (Exception $e) {
+    watchdog('openai_related_content', 'Error rendering node @nid for text extraction: @error', [
+      '@nid' => $node->nid,
+      '@error' => $e->getMessage(),
+    ], WATCHDOG_WARNING);
+
+    // Fallback: try to extract text from common text fields.
+    $text_parts = array_merge($text_parts, openai_related_content_extract_field_text($node));
+  }
+
+  // If we still have no content beyond the title, try field extraction as fallback.
+  if (count($text_parts) <= 1) {
+    $fallback_text = openai_related_content_extract_field_text($node);
+    if (!empty($fallback_text)) {
+      $text_parts = array_merge($text_parts, $fallback_text);
+    }
+  }
+
+  $combined = implode(' ', $text_parts);
+
+  // Truncate to a reasonable length for embeddings (8000 chars is safe for most models).
+  if (strlen($combined) > 8000) {
+    $combined = substr($combined, 0, 8000);
+  }
+
+  return $combined;
+}
+
+/**
+ * Helper function to extract text from common field types.
+ *
+ * This is a fallback method when rendering fails or produces no content.
+ *
+ * @param object $node
+ *   The node object.
+ * @return array
+ *   Array of text strings extracted from fields.
+ */
+function openai_related_content_extract_field_text($node) {
+  $text_parts = [];
+
+  // Get field instances for this node type.
+  $instances = field_info_instances('node', $node->type);
+
+  foreach ($instances as $field_name => $instance) {
+    $field_info = field_info_field($field_name);
+
+    if (empty($field_info)) {
+      continue;
+    }
+
+    // Handle different field types that contain text.
+    $field_type = $field_info['type'];
+    $items = field_get_items('node', $node, $field_name);
+
+    if (empty($items)) {
+      continue;
+    }
+
+    switch ($field_type) {
+      case 'text':
+      case 'text_long':
+      case 'text_with_summary':
+        foreach ($items as $item) {
+          $value = '';
+          if (!empty($item['safe_value'])) {
+            $value = strip_tags($item['safe_value']);
+          }
+          elseif (!empty($item['value'])) {
+            $value = strip_tags($item['value']);
+          }
+          if (!empty($value)) {
+            $text_parts[] = trim($value);
+          }
+        }
+        break;
+
+      case 'paragraphs':
+        // Handle Paragraphs field - render each paragraph.
+        foreach ($items as $item) {
+          if (!empty($item['entity'])) {
+            $paragraph = $item['entity'];
+          }
+          elseif (!empty($item['value'])) {
+            // Try to load the paragraph entity.
+            if (function_exists('paragraphs_item_load')) {
+              $paragraph = paragraphs_item_load($item['value']);
+            }
+          }
+
+          if (!empty($paragraph)) {
+            // Render the paragraph and extract text.
+            $paragraph_view = entity_view('paragraphs_item', [$paragraph]);
+            $paragraph_html = backdrop_render($paragraph_view);
+            $paragraph_text = html_entity_decode(strip_tags($paragraph_html), ENT_QUOTES, 'UTF-8');
+            $paragraph_text = preg_replace('/\s+/', ' ', trim($paragraph_text));
+            if (!empty($paragraph_text)) {
+              $text_parts[] = $paragraph_text;
+            }
+          }
+        }
+        break;
+
+      case 'taxonomy_term_reference':
+        // Include taxonomy terms as they add semantic value.
+        foreach ($items as $item) {
+          if (!empty($item['tid'])) {
+            $term = taxonomy_term_load($item['tid']);
+            if ($term && !empty($term->name)) {
+              $text_parts[] = $term->name;
+            }
+          }
+        }
+        break;
+    }
+  }
+
+  return $text_parts;
 }
 
 /**
@@ -502,7 +652,9 @@ function openai_related_content_requirements($mode = 'runtime') {
  * Gets embedding vector using OpenAI.
  *
  * @param string $text
+ *   The text to generate an embedding for.
  * @return array|null
+ *   The embedding vector as an array of floats, or NULL on failure.
  */
 function openai_related_content_get_embedding($text) {
   $openai_config = config('openai.settings');
@@ -544,10 +696,47 @@ function openai_related_content_get_embedding($text) {
       }
     }
 
-    // Call embedding method with correct parameter order: (text, model)
-    $result = $openai_api->embedding($text, $embeddings_model);
+    // Truncate text if too long (OpenAI has token limits).
+    $text_for_embedding = $text;
+    if (strlen($text_for_embedding) > 8000) {
+      $text_for_embedding = substr($text_for_embedding, 0, 8000);
+    }
 
-    // If the client returns an object/array with vector, normalize expectations.
+    watchdog('openai_related_content', 'Requesting embedding: model=@model, text_length=@len', [
+      '@model' => $embeddings_model,
+      '@len' => strlen($text_for_embedding),
+    ], WATCHDOG_DEBUG);
+
+    // Call embedding method with correct parameter order: (text, model)
+    $result = $openai_api->embedding($text_for_embedding, $embeddings_model);
+
+    // Validate the result is a proper embedding vector.
+    if (!is_array($result)) {
+      watchdog('openai_related_content', 'Embedding result is not an array. Type: @type', [
+        '@type' => gettype($result),
+      ], WATCHDOG_WARNING);
+      return NULL;
+    }
+
+    // Check if it's a nested structure (full API response) vs just the vector.
+    if (isset($result['data'][0]['embedding'])) {
+      // Full API response structure - extract the vector.
+      $result = $result['data'][0]['embedding'];
+      watchdog('openai_related_content', 'Extracted embedding from nested structure.', [], WATCHDOG_DEBUG);
+    }
+
+    // Final validation: ensure it's a flat array of numbers.
+    if (empty($result) || !isset($result[0]) || !is_numeric($result[0])) {
+      watchdog('openai_related_content', 'Embedding result does not appear to be a valid vector. First element type: @type', [
+        '@type' => isset($result[0]) ? gettype($result[0]) : 'undefined',
+      ], WATCHDOG_WARNING);
+      return NULL;
+    }
+
+    watchdog('openai_related_content', 'Embedding generated successfully: @dims dimensions', [
+      '@dims' => count($result),
+    ], WATCHDOG_DEBUG);
+
     return $result;
   }
   catch (Exception $e) {
@@ -652,11 +841,63 @@ function openai_related_content_milvus_search($server, $collection, $embedding, 
 
   try {
     $vector_client = new SearchApiAiMilvusVectorClient($server->options);
-    $outputFields = ['nid', 'title'];
+
+    // Request common metadata fields that might contain node info.
+    // Milvus collections from Search API AI may use different field names.
+    $outputFields = ['nid', 'title', 'entity_id', 'entity_type', 'backdrop_entity_id', 'backdrop_long_id'];
     $top_k = max(100, (int)$limit * 50);
 
+    watchdog('openai_related_content', 'Milvus search: collection=@collection, top_k=@topk, embedding_length=@len', [
+      '@collection' => $collection,
+      '@topk' => $top_k,
+      '@len' => count($embedding),
+    ], WATCHDOG_DEBUG);
+
     $matches = $vector_client->search($collection, $embedding, $top_k, $outputFields);
-    return $matches;
+
+    watchdog('openai_related_content', 'Milvus search raw results: @count matches, data: @data', [
+      '@count' => is_array($matches) ? count($matches) : 'not-array',
+      '@data' => is_array($matches) ? json_encode(array_slice($matches, 0, 3)) : print_r($matches, TRUE),
+    ], WATCHDOG_DEBUG);
+
+    // Normalize results: extract nid from various possible field structures.
+    $normalized = [];
+    foreach ($matches as $match) {
+      $nid = NULL;
+      $title = '';
+
+      // Try to get nid from various possible fields.
+      if (!empty($match['nid'])) {
+        $nid = $match['nid'];
+      }
+      elseif (!empty($match['entity_id']) && (!empty($match['entity_type']) && $match['entity_type'] === 'node')) {
+        $nid = $match['entity_id'];
+      }
+      elseif (!empty($match['backdrop_entity_id']) && preg_match('/^node:(\d+)/', $match['backdrop_entity_id'], $m)) {
+        $nid = $m[1];
+      }
+      elseif (!empty($match['backdrop_long_id']) && preg_match('/entity:node\/(\d+)/', $match['backdrop_long_id'], $m)) {
+        $nid = $m[1];
+      }
+
+      // Get title if available.
+      if (!empty($match['title'])) {
+        $title = $match['title'];
+      }
+
+      if ($nid) {
+        $normalized[] = [
+          'nid' => $nid,
+          'title' => $title,
+        ];
+      }
+    }
+
+    watchdog('openai_related_content', 'Milvus search normalized: @count results', [
+      '@count' => count($normalized),
+    ], WATCHDOG_DEBUG);
+
+    return $normalized;
   }
   catch (Exception $e) {
     watchdog('openai_related_content', 'Milvus vector search failed: @msg', ['@msg' => $e->getMessage()], WATCHDOG_ERROR);
@@ -708,6 +949,13 @@ function openai_related_content_pinecone_search($server, $index, $embedding, $li
 
     $top_k = max(100, (int)$limit * 50);
 
+    watchdog('openai_related_content', 'Pinecone search: namespace=@ns, dimension=@dim, top_k=@topk, embedding_length=@len', [
+      '@ns' => $namespace,
+      '@dim' => $dimension,
+      '@topk' => $top_k,
+      '@len' => count($embedding),
+    ], WATCHDOG_DEBUG);
+
     $query_params = [
       'vector' => $embedding,
       'top_k' => $top_k,
@@ -718,18 +966,58 @@ function openai_related_content_pinecone_search($server, $index, $embedding, $li
 
     $result = $vector_client->query($query_params);
 
+    watchdog('openai_related_content', 'Pinecone raw response: matches_count=@count, sample=@sample', [
+      '@count' => isset($result['matches']) ? count($result['matches']) : 0,
+      '@sample' => isset($result['matches'][0]) ? json_encode($result['matches'][0]) : 'none',
+    ], WATCHDOG_DEBUG);
+
     // Pinecone returns results in 'matches' array
     $matches = [];
     if (!empty($result['matches']) && is_array($result['matches'])) {
       foreach ($result['matches'] as $match) {
         $metadata = $match['metadata'] ?? [];
+        $nid = NULL;
+
+        // Try multiple ways to extract the node ID from metadata
+        if (!empty($metadata['nid'])) {
+          $nid = $metadata['nid'];
+        }
+        elseif (!empty($metadata['entity_id']) && (!empty($metadata['entity_type']) && $metadata['entity_type'] === 'node')) {
+          $nid = $metadata['entity_id'];
+        }
+        elseif (!empty($metadata['backdrop_entity_id']) && preg_match('/^node:(\d+)/', $metadata['backdrop_entity_id'], $m)) {
+          $nid = $m[1];
+        }
+        elseif (!empty($match['id'])) {
+          // Try to extract node ID from the Pinecone vector ID (often formatted as "node:123:field_name")
+          if (preg_match('/^node[:\-_]?(\d+)/i', $match['id'], $m)) {
+            $nid = $m[1];
+          }
+          elseif (preg_match('/entity[:\-_]?node[:\-_\/]?(\d+)/i', $match['id'], $m)) {
+            $nid = $m[1];
+          }
+          elseif (preg_match('/(\d+)/', $match['id'], $m)) {
+            // Last resort: extract any number from the ID
+            $nid = $m[1];
+          }
+        }
+
+        $title = $metadata['title'] ?? '';
+
         $matches[] = [
-          'nid' => $metadata['nid'] ?? NULL,
-          'title' => $metadata['title'] ?? '',
+          'nid' => $nid,
+          'title' => $title,
           'score' => $match['score'] ?? 0,
+          '_debug_id' => $match['id'] ?? 'unknown',
         ];
       }
     }
+
+    watchdog('openai_related_content', 'Pinecone normalized: @count matches with nids, first_few=@sample', [
+      '@count' => count(array_filter($matches, function($m) { return !empty($m['nid']); })),
+      '@sample' => json_encode(array_slice($matches, 0, 3)),
+    ], WATCHDOG_DEBUG);
+
     return $matches;
   }
   catch (Exception $e) {
@@ -745,9 +1033,17 @@ function openai_related_content_pinecone_search($server, $index, $embedding, $li
 function openai_related_content_vector_search($embedding, $exclude_nid, $limit = 3, $index_id = NULL) {
   // Validate embedding
   if (empty($embedding) || !is_array($embedding)) {
-    watchdog('openai_related_content', 'Invalid or empty embedding provided to vector search.', [], WATCHDOG_WARNING);
+    watchdog('openai_related_content', 'Invalid or empty embedding provided to vector search. Type: @type', [
+      '@type' => gettype($embedding),
+    ], WATCHDOG_WARNING);
     return [];
   }
+
+  watchdog('openai_related_content', 'Vector search: embedding has @count dimensions, exclude_nid=@nid, limit=@limit', [
+    '@count' => count($embedding),
+    '@nid' => $exclude_nid,
+    '@limit' => $limit,
+  ], WATCHDOG_DEBUG);
 
   // Get config
   $config = config('openai_related_content.settings');
@@ -755,6 +1051,11 @@ function openai_related_content_vector_search($embedding, $exclude_nid, $limit =
     $index_id = $config->get('index_id') ?: 'milvus_search_2';
   }
   $collection = $config->get('collection_name') ?: 'amafoundation';
+
+  watchdog('openai_related_content', 'Vector search config: index_id=@index, collection=@collection', [
+    '@index' => $index_id,
+    '@collection' => $collection,
+  ], WATCHDOG_DEBUG);
 
   // Load the Search API index and get the server
   if (!function_exists('search_api_index_load')) {
@@ -772,6 +1073,7 @@ function openai_related_content_vector_search($embedding, $exclude_nid, $limit =
   $server_class = strtolower($server->class);
 
   // Determine which vector client to use based on server class
+  $vector_client = NULL;
   $matches = [];
 
   // Route to the appropriate backend search function
@@ -787,6 +1089,9 @@ function openai_related_content_vector_search($embedding, $exclude_nid, $limit =
   }
 
   if (empty($matches)) {
+    watchdog('openai_related_content', 'Vector search returned empty matches from @backend', [
+      '@backend' => $server_class,
+    ], WATCHDOG_DEBUG);
     return [];
   }
 
@@ -794,37 +1099,56 @@ function openai_related_content_vector_search($embedding, $exclude_nid, $limit =
     return [];
   }
 
+  watchdog('openai_related_content', 'Processing @count raw matches for filtering', [
+    '@count' => count($matches),
+  ], WATCHDOG_DEBUG);
+
   $related = [];
   $seen = [];
+  $filter_stats = [
+    'no_nid' => 0,
+    'is_current' => 0,
+    'duplicate' => 0,
+    'excluded' => 0,
+    'unpublished' => 0,
+    'accepted' => 0,
+  ];
+
   foreach ($matches as $match) {
     $nid = $match['nid'] ?? NULL;
     $title = $match['title'] ?? '';
 
     if (!$nid) {
+      $filter_stats['no_nid']++;
       continue;
     }
 
     // Skip if it's the current node
     if ((string)$nid === (string)$exclude_nid) {
+      $filter_stats['is_current']++;
       continue;
     }
 
     // Skip if we've already added this node
     if (isset($seen[$nid])) {
+      $filter_stats['duplicate']++;
       continue;
     }
 
     // Skip if this node is excluded (either per-node or URL-based)
     $excluded = openai_related_content_is_excluded($nid, TRUE);
     if (!empty($excluded['excluded'])) {
+      $filter_stats['excluded']++;
       continue;
     }
 
     $related_node = node_load($nid);
     if (!$related_node || empty($related_node->status)) {
+      $filter_stats['unpublished']++;
       continue;
     }
 
+    $filter_stats['accepted']++;
     $related[] = ['nid' => $nid, 'title' => $title];
     $seen[$nid] = TRUE;
 
@@ -832,6 +1156,15 @@ function openai_related_content_vector_search($embedding, $exclude_nid, $limit =
       break;
     }
   }
+
+  watchdog('openai_related_content', 'Filter stats: no_nid=@no_nid, current=@current, dup=@dup, excluded=@excluded, unpub=@unpub, accepted=@accepted', [
+    '@no_nid' => $filter_stats['no_nid'],
+    '@current' => $filter_stats['is_current'],
+    '@dup' => $filter_stats['duplicate'],
+    '@excluded' => $filter_stats['excluded'],
+    '@unpub' => $filter_stats['unpublished'],
+    '@accepted' => $filter_stats['accepted'],
+  ], WATCHDOG_DEBUG);
 
   return $related;
 }
@@ -858,9 +1191,20 @@ function openai_related_content_is_excluded($nid, $details = FALSE) {
   $methods = [];
 
   // Check per-node exclusion flag (database)
-  $result = db_query("SELECT 1 FROM {openai_related_content_exclude} WHERE nid = :nid", array(':nid' => $nid))->fetchField();
-  if ($result) {
-    $methods[] = 'per-node checkbox';
+  try {
+    if (db_table_exists('openai_related_content_exclude')) {
+      $result = db_query("SELECT 1 FROM {openai_related_content_exclude} WHERE nid = :nid", [':nid' => $nid])->fetchField();
+      if ($result) {
+        $methods[] = 'per-node checkbox';
+      }
+    }
+  }
+  catch (Exception $e) {
+    // Table may not exist yet; log and continue.
+    watchdog('openai_related_content', 'Error checking exclusion for nid @nid: @error', [
+      '@nid' => $nid,
+      '@error' => $e->getMessage(),
+    ], WATCHDOG_WARNING);
   }
 
   // Check URL-based exclusions from settings
@@ -994,7 +1338,7 @@ function openai_related_content_test_form($form, &$form_state) {
     $index = search_api_index_load($index_id);
     if ($index && $index->server()) {
       $backend_type = strtolower($index->server()->class);
-      $backend_info = '<li><strong>Backend Type:</strong> <span style="color: blue;">' . check_plain(ucfirst($backend_type)) . '</span></li>';
+      $backend_info = '<li><strong>Backend Type:</strong> <span style="color: blue;">' . ucfirst($backend_type) . '</span></li>';
     }
   }
 
@@ -1044,13 +1388,6 @@ function openai_related_content_test_form($form, &$form_state) {
     ];
   }
 
-  $form['debug_links'] = [
-    '#markup' => '<hr><h3>' . t('Debug Tools') . '</h3>' .
-      '<ul>' .
-      '<li>' . l(t('View all recent log messages'), 'admin/reports/dblog') . '</li>' .
-      '<li>' . l(t('View openai_related_content logs'), 'admin/reports/dblog', ['query' => ['type' => ['openai_related_content']]]) . '</li>' .
-      '</ul>',
-  ];
 
   return $form;
 }
@@ -1081,14 +1418,55 @@ function openai_related_content_test_form_submit($form, &$form_state) {
 
   $results_html = '<h3>' . t('Test Results for Node @nid: @title', ['@nid' => $nid, '@title' => $test_node->title]) . '</h3>';
   $results_html .= $exclusion_info;
+
+  // Step 1: Show text extraction results
+  $results_html .= '<h4>' . t('Step 1: Text Extraction') . '</h4>';
+  $text = openai_related_content_get_text($test_node);
+  $text_preview = strlen($text) > 500 ? substr($text, 0, 500) . '...' : $text;
+  $results_html .= '<p><strong>Text length:</strong> ' . strlen($text) . ' characters</p>';
+  $results_html .= '<details><summary>Text preview (first 500 chars)</summary><pre style="white-space: pre-wrap; background: #f5f5f5; padding: 10px; max-height: 200px; overflow: auto;">' . check_plain($text_preview) . '</pre></details>';
+
+  if (empty($text) || strlen($text) < 50) {
+    $results_html .= '<p style="color: orange;"><strong>⚠ Warning:</strong> Very little text extracted. This may result in poor embeddings.</p>';
+  }
+
+  // Step 2: Show embedding results
+  $results_html .= '<h4>' . t('Step 2: Embedding Generation') . '</h4>';
+  $embedding = openai_related_content_get_embedding($text);
+
+  if (empty($embedding)) {
+    $results_html .= '<p style="color: red;"><strong>✗ Failed:</strong> No embedding was generated. Check watchdog logs for errors.</p>';
+  }
+  elseif (!is_array($embedding)) {
+    $results_html .= '<p style="color: red;"><strong>✗ Failed:</strong> Embedding is not an array. Type: ' . gettype($embedding) . '</p>';
+  }
+  else {
+    $results_html .= '<p style="color: green;"><strong>✓ Success:</strong> Embedding generated with ' . count($embedding) . ' dimensions.</p>';
+    $results_html .= '<details><summary>First 10 values</summary><pre>' . check_plain(json_encode(array_slice($embedding, 0, 10))) . '</pre></details>';
+  }
+
+  // Step 3: Show vector search results
+  $results_html .= '<h4>' . t('Step 3: Vector Search') . '</h4>';
   $results_html .= '<p>' . t('Requesting @limit related items...', ['@limit' => $limit]) . '</p>';
+
+  // Clear cache first to ensure fresh results
+  $cache_key = 'openai_related_content_matches:' . $nid . ':' . $limit . ':default';
+  cache_clear_all($cache_key, 'cache');
 
   $related = openai_related_content_get_related_matches($test_node, $limit);
 
   if (empty($related)) {
-    $results_html .= '<p><strong style="color: red;">' . t('No related content found.') . '</strong></p>';
-    $results_html .= '<p>' . t('Check the watchdog logs at <a href="@url">Recent log messages</a> for details.', ['@url' => url('admin/reports/dblog')]) . '</p>';
-  } else {
+    $results_html .= '<p><strong style="color: red;">' . t('✗ No related content found.') . '</strong></p>';
+    $results_html .= '<p>' . t('Possible causes:') . '</p>';
+    $results_html .= '<ul>';
+    $results_html .= '<li>The vector database collection may be empty or not indexed</li>';
+    $results_html .= '<li>The embedding dimensions may not match the indexed vectors</li>';
+    $results_html .= '<li>The collection name may be incorrect</li>';
+    $results_html .= '<li>Connection to Milvus/Pinecone may have failed</li>';
+    $results_html .= '</ul>';
+    $results_html .= '<p>' . t('Check the <a href="@url">watchdog logs</a> for detailed debug messages.', ['@url' => url('admin/reports/dblog', ['query' => ['type' => 'openai_related_content']])]) . '</p>';
+  }
+  else {
     $results_html .= '<p><strong style="color: green;">' . t('✓ Found @count related items:', ['@count' => count($related)]) . '</strong></p>';
     $results_html .= '<ol>';
     foreach ($related as $match) {
@@ -1098,7 +1476,8 @@ function openai_related_content_test_form_submit($form, &$form_state) {
       $results_html .= '<li>' . $status_icon . ' ' . l($title, 'node/' . $match['nid']) . ' (nid: ' . $match['nid'] . ')';
       if (!$rel_node) {
         $results_html .= ' <span style="color: red;">[Node not found]</span>';
-      } elseif (!$rel_node->status) {
+      }
+      elseif (!$rel_node->status) {
         $results_html .= ' <span style="color: orange;">[Unpublished]</span>';
       }
       $results_html .= '</li>';
