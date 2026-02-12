@@ -466,8 +466,9 @@ function openai_related_content_get_text($node) {
     $rendered = backdrop_render($build);
     // Some layouts might wrap the content in a lot of boilerplate.
     // We want to be aggressive in stripping tags but careful with spacing.
-    // Replace block-level tags with spaces before stripping to avoid word merging.
+    // Replace block-level tags and line breaks with spaces before stripping to avoid word merging.
     $rendered = preg_replace('/<(address|article|aside|blockquote|canvas|dd|div|dl|dt|fieldset|figcaption|figure|footer|form|h1|h2|h3|h4|h5|h6|header|hr|li|main|nav|noscript|ol|p|pre|section|table|tfoot|ul|video)[^>]*>/i', ' ', $rendered);
+    $rendered = preg_replace('/<br\s*\/?>/i', ' ', $rendered);
 
     // Strip HTML tags and decode entities to get plain text.
     $plain_text = html_entity_decode(strip_tags($rendered), ENT_QUOTES, 'UTF-8');
