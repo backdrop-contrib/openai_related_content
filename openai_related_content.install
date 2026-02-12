@@ -72,13 +72,3 @@ function openai_related_content_update_1002() {
   openai_related_content_ensure_view_display($config);
 }
 
-/**
- * Set the default view display for sites already on schema 7001+.
- *
- * This ensures Backdrop sites that previously used a 7001 update hook
- * (and thus will not run update 1002) still get the view_display default.
- */
-function openai_related_content_update_7002() {
-  $config = config('openai_related_content.settings');
-  openai_related_content_ensure_view_display($config);
-}
