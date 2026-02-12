@@ -9,6 +9,10 @@ function openai_related_content_config_info() {
       'label' => t('OpenAI Related Content Settings'),
       'group' => t('Configuration'),
     ],
+    'views.view.openai_related_content' => [
+      'label' => t('OpenAI Related Content View'),
+      'group' => t('Views'),
+    ],
   ];
 }
 
