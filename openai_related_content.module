@@ -405,20 +405,52 @@ function openai_related_content_get_text($node) {
   if (!empty($node->title)) {
     $text_parts[] = $node->title;
   }
-
   // Try to get text from the rendered node content.
   // This captures Paragraphs, Layout Builder, and all field output.
   try {
     // Build the node content in 'full' view mode for best text extraction.
-    $build = node_view($node, 'full');
+    // Use the entity controller's view() which is more robust than node_view().
+    $view_mode = 'full';
+    $controller = entity_get_controller('node');
+    if (is_object($controller) && method_exists($controller, 'view')) {
+      $build = $controller->view([$node->nid => $node], $view_mode);
+      // The controller returns an array keyed by node id.
+      if (isset($build['node'][$node->nid])) {
+        $build = $build['node'][$node->nid];
+      }
+    }
+    else {
+      $build = node_view($node, $view_mode);
+    }
 
     // Remove elements that shouldn't contribute to semantic content.
-    unset($build['links']);
-    unset($build['comments']);
-    unset($build['#contextual_links']);
+    // This includes administrative markup, navigation, and metadata.
+    $exclude_keys = [
+      'links',
+      'comments',
+      '#contextual_links',
+      'contextual_links',
+    ];
+
+    foreach ($exclude_keys as $key) {
+      if (isset($build[$key])) {
+        unset($build[$key]);
+      }
+    }
+
+    // Also remove any elements that look like contextual links or administrative items.
+    foreach (element_children($build) as $key) {
+      if (strpos($key, 'contextual') !== FALSE || strpos($key, 'admin') !== FALSE) {
+        unset($build[$key]);
+      }
+    }
 
     // Render the content.
     $rendered = backdrop_render($build);
+    // Some layouts might wrap the content in a lot of boilerplate.
+    // We want to be aggressive in stripping tags but careful with spacing.
+    // Replace block-level tags with spaces before stripping to avoid word merging.
+    $rendered = preg_replace('/<(address|article|aside|blockquote|canvas|dd|div|dl|dt|fieldset|figcaption|figure|footer|form|h1|h2|h3|h4|h5|h6|header|hr|li|main|nav|noscript|ol|p|pre|section|table|tfoot|ul|video)[^>]*>/i', ' ', $rendered);
 
     // Strip HTML tags and decode entities to get plain text.
     $plain_text = html_entity_decode(strip_tags($rendered), ENT_QUOTES, 'UTF-8');
@@ -462,7 +494,6 @@ function openai_related_content_get_text($node) {
       $combined = substr($combined, 0, 8000);
     }
   }
-
   return $combined;
 }
 
@@ -846,34 +877,45 @@ function openai_related_content_milvus_search($server, $collection, $embedding, 
 
     // Normalize results: extract nid from various possible field structures.
     $normalized = [];
-    foreach ($matches as $match) {
-      $nid = NULL;
-      $title = '';
+    if (is_array($matches)) {
+      foreach ($matches as $match) {
+        $nid = NULL;
+        $title = '';
 
-      // Try to get nid from various possible fields.
-      if (!empty($match['nid'])) {
-        $nid = $match['nid'];
-      }
-      elseif (!empty($match['entity_id']) && (!empty($match['entity_type']) && $match['entity_type'] === 'node')) {
-        $nid = $match['entity_id'];
-      }
-      elseif (!empty($match['backdrop_entity_id']) && preg_match('/^node:(\d+)/', $match['backdrop_entity_id'], $m)) {
-        $nid = $m[1];
-      }
-      elseif (!empty($match['backdrop_long_id']) && preg_match('/entity:node\/(\d+)/', $match['backdrop_long_id'], $m)) {
-        $nid = $m[1];
-      }
+        // Try to get nid from various possible fields.
+        if (!empty($match['nid'])) {
+          $nid = $match['nid'];
+        }
+        // NOTE: We check entity_type === 'node' before accepting entity_id. However,
+        // in some vector store metadata the entity_type field may be missing or may
+        // indicate a different entity (for example 'user' or 'taxonomy_term'). If
+        // entity_type is present and not 'node', we should *not* treat
+        // entity_id as a node id. Use a slightly more permissive check that will
+        // accept entity_id when entity_type is absent (common for older indices)
+        // or when it explicitly equals 'node'. This avoids accidentally loading
+        // the wrong entity type while increasing compatibility with metadata that
+        // doesn't include entity_type.
+        elseif (!empty($match['entity_id']) && (empty($match['entity_type']) || $match['entity_type'] === 'node')) {
+          $nid = $match['entity_id'];
+        }
+        elseif (!empty($match['backdrop_entity_id']) && preg_match('/^node:(\d+)/', $match['backdrop_entity_id'], $m)) {
+          $nid = $m[1];
+        }
+        elseif (!empty($match['backdrop_long_id']) && preg_match('/entity:node\/(\d+)/', $match['backdrop_long_id'], $m)) {
+          $nid = $m[1];
+        }
 
-      // Get title if available.
-      if (!empty($match['title'])) {
-        $title = $match['title'];
-      }
+        // Get title if available.
+        if (!empty($match['title'])) {
+          $title = $match['title'];
+        }
 
-      if ($nid) {
-        $normalized[] = [
-          'nid' => $nid,
-          'title' => $title,
-        ];
+        if ($nid) {
+          $normalized[] = [
+            'nid' => $nid,
+            'title' => $title,
+          ];
+        }
       }
     }
 
@@ -1045,6 +1087,12 @@ function openai_related_content_vector_search($embedding, $exclude_nid, $limit =
 
   $related = [];
   $seen = [];
+
+  // Lightweight stats collector; only 'unpublished' is used in current flow
+  // when access checks fail. Initialize to avoid undefined variable warnings.
+  $filter_stats = [
+    'unpublished' => 0,
+  ];
 
   foreach ($matches as $match) {
     $nid = $match['nid'] ?? NULL;

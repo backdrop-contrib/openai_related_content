@@ -30,7 +30,7 @@ function openai_related_content_schema() {
 /**
  * Create exclusion table.
  */
-function openai_related_content_update_7001() {
+function openai_related_content_update_1001() {
   $schema = openai_related_content_schema();
   if (!db_table_exists('openai_related_content_exclude')) {
     db_create_table('openai_related_content_exclude', $schema['openai_related_content_exclude']);
@@ -67,7 +67,7 @@ function openai_related_content_install() {
 /**
  * Set the default view display if not already set.
  */
-function openai_related_content_update_1001() {
+function openai_related_content_update_1002() {
   $config = config('openai_related_content.settings');
   openai_related_content_ensure_view_display($config);
 }
