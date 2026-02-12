@@ -415,8 +415,14 @@ function openai_related_content_get_text($node) {
     if (is_object($controller) && method_exists($controller, 'view')) {
       $build = $controller->view([$node->nid => $node], $view_mode);
       // The controller returns an array keyed by node id.
-      if (isset($build['node'][$node->nid])) {
+      if (isset($build[$node->nid])) {
+        $build = $build[$node->nid];
+      }
+      elseif (isset($build['node'][$node->nid])) {
         $build = $build['node'][$node->nid];
+      }
+      else {
+        $build = reset($build);
       }
     }
     else {
@@ -439,8 +445,15 @@ function openai_related_content_get_text($node) {
     }
 
     // Also remove any elements that look like contextual links or administrative items.
+    // Use stricter matching so keys that merely contain the substring
+    // 'admin' (e.g., field_administrator_notes) are not removed.
     foreach (element_children($build) as $key) {
-      if (strpos($key, 'contextual') !== FALSE || strpos($key, 'admin') !== FALSE) {
+      // Remove only keys that are actual contextual/admin wrappers, i.e.
+      // those that start with 'contextual' or 'admin' (optionally followed
+      // by an underscore) — e.g. 'contextual', 'contextual_1', 'admin',
+      // 'admin_actions'. This avoids accidental removal of fields with
+      // 'admin' contained elsewhere in the name.
+      if (preg_match('/^(?:contextual|admin)(?:$|_)/', $key)) {
         unset($build[$key]);
       }
     }
@@ -1088,12 +1101,6 @@ function openai_related_content_vector_search($embedding, $exclude_nid, $limit =
   $related = [];
   $seen = [];
 
-  // Lightweight stats collector; only 'unpublished' is used in current flow
-  // when access checks fail. Initialize to avoid undefined variable warnings.
-  $filter_stats = [
-    'unpublished' => 0,
-  ];
-
   foreach ($matches as $match) {
     $nid = $match['nid'] ?? NULL;
     $title = $match['title'] ?? '';
@@ -1125,8 +1132,6 @@ function openai_related_content_vector_search($embedding, $exclude_nid, $limit =
 
     // Ensure the current user has view access to this node.
     if (!node_access('view', $related_node)) {
-      // Treat inaccessible content similarly to unpublished for stats purposes.
-      $filter_stats['unpublished']++;
       continue;
     }
     $related[] = ['nid' => $nid, 'title' => $title];
